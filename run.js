@@ -17,17 +17,28 @@
 
 'use strict';
 
-const run = require('./index.js');
+process.on('unhandledRejection', (e) => {
+  console.error(e);
+  process.exit(1);
+});
 
-const path = process.argv[2] || '';
-if (!path) {
+const run = require('./index.js');
+const mri = require('mri');
+
+const options = mri(process.argv.slice(2), {
+  boolean: ['debug'],
+});
+if (!options._.length) {
   console.error('fatal: path must be specified as 2nd arg');
   process.exit(-2);
 }
 
-run({path, log: true}).then((out) => {
-  process.exit(out.fail.length);
-}).catch((err) => {
-  console.error(err);
-  process.exit(-1);
-});
+void async function() {
+  const out = await run({
+    resources: options._,
+    headless: !options.debug,
+  });
+  if (out.fail.length) {
+    process.exit(out.fail.length);
+  }
+}();

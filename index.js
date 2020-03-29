@@ -21,6 +21,8 @@ const dhost = require('dhost');
 const http = require('http');
 const util = require('util');
 
+const harnessName = '__harness.html';
+
 function formatHost(addr) {
   if (addr.family === 'IPv6') {
     return `[${addr.address}]:${addr.port}`;
@@ -28,7 +30,7 @@ function formatHost(addr) {
   return `${addr.address}:${addr.port}`;
 }
 
-function runServer() {
+function runServer(renderHarness) {
   const options = {
     host: 'localhost',  // needed to force IPv4
     port: 0,            // choose unused high port
@@ -41,6 +43,11 @@ function runServer() {
     server.listen(options, () => resolve(server));
     server.on('request', (req, res) => {
       handler(req, res, () => {
+        if (req.url === `/${harnessName}`) {
+          res.setHeader('Content-Type', 'text/html');
+          res.write(renderHarness());
+          return res.end();
+        }
         // next() is called so dhost didn't handle us, serve 404
         res.writeHead(404);
         res.end();
@@ -123,28 +130,83 @@ function wrapMocha() {
   });
 }
 
-module.exports = function({path, args=[], headless=true, log=false}) {
+module.exports = function(options) {
+  options = Object.assign({
+    args: [],
+    path: '',
+    headless: true,
+    log: true,
+    resources: [],
+  }, options);
+
+  const args = options.args.slice();
   const cleanup = [];
 
   if (process.env.CI || process.env.TRAVIS) {
     args.push('--no-sandbox', '--disable-setuid-sandbox');
   }
 
-  async function runner() {
-    const server = await runServer();
+  const p = (async function runner() {
+    const server = await runServer(() => {
+      return `
+<!DOCTYPE html>
+<html>
+<head>
+<link type="stylesheet" href="/node_modules/mocha/mocha.css" />
+<script src="/node_modules/mocha/mocha.js"></script>
+<script src="/node_modules/chai/chai.js"></script>
+<script>
+// TODO: assumes TDD
+mocha.setup({ui: 'tdd'});
+window.assert = chai.assert;
+</script>
+
+${
+  options.resources.map((x) => {
+    if (typeof x !== 'string') {
+      throw new Error(`resource must be string: ${x}`);
+    }
+    return `<script src=${JSON.stringify(x)}></script>`
+  })
+}
+
+<script>
+(function() {
+  var pageError = null;
+
+  window.addEventListener('error', function(event) {
+    pageError = event.filename + ':' + event.lineno + ' ' + event.message;
+  });
+
+  window.addEventListener('load', function() {
+    if (pageError) {
+      suite('page-script-errors', function() {
+        test('no script errors on page', function() {
+          throw pageError;
+        });
+      });
+    }
+    mocha.run();
+  });
+})();
+</script>
+
+</head>
+<body>
+
+</body>
+</html>
+      `;
+    });
     cleanup.push(() => server.close());
 
-    const addr = server.address();
-    const url = `http://${formatHost(addr)}/${path}`;
-
-    const options = {headless, args};
-    const browser = await puppeteer.launch(options);
+    const browser = await puppeteer.launch({headless: options.headless, args});
     cleanup.push(() => browser.close());
 
     const pages = await browser.pages();
     const page = pages[0] || await browser.newPage();
 
-    if (log) {
+    if (options.log) {
       page.on('console', (msg) => {
         // arg.jsonValue returns a Promise for some reason
         const p = msg._args.map((arg) => arg.jsonValue());
@@ -158,15 +220,14 @@ module.exports = function({path, args=[], headless=true, log=false}) {
     page.on('dialog', (dialog) => dialog.dismiss());
 
     await page.evaluateOnNewDocument(wrapMocha);
-    await page.goto(url);
+    await page.goto(`http://${formatHost(server.address())}/${harnessName}`);
 
     // wait for and return test result global from page
     const timeout = 20 * 1000;
     await page.waitForFunction(() => window.__mochaTest, {timeout});
     return await page.evaluate(() => window.__mochaTest);
-  }
+  })();
 
-  const p = runner();
   return p.then(async () => {
     while (cleanup.length !== 0) {
       await cleanup.pop()();
