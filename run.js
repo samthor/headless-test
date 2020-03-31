@@ -38,6 +38,7 @@ void async function() {
     resources: options._,
     headless: !options.debug,
   });
+
   if (out.fail.length) {
     process.exit(out.fail.length);
   }

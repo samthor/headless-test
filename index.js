@@ -17,9 +17,8 @@
 'use strict';
 
 const puppeteer = require('puppeteer');
-const dhost = require('dhost');
-const http = require('http');
 const util = require('util');
+const runServer = require('./lib/server.js');
 
 const harnessName = '__harness.html';
 
@@ -28,106 +27,6 @@ function formatHost(addr) {
     return `[${addr.address}]:${addr.port}`;
   }
   return `${addr.address}:${addr.port}`;
-}
-
-function runServer(renderHarness) {
-  const options = {
-    host: 'localhost',  // needed to force IPv4
-    port: 0,            // choose unused high port
-  };
-  return new Promise((resolve, reject) => {
-    const handler = dhost({
-      listing: false,
-    });
-    const server = http.createServer();
-    server.listen(options, () => resolve(server));
-    server.on('request', (req, res) => {
-      handler(req, res, () => {
-        if (req.url === `/${harnessName}`) {
-          res.setHeader('Content-Type', 'text/html');
-          res.write(renderHarness());
-          return res.end();
-        }
-        // next() is called so dhost didn't handle us, serve 404
-        res.writeHead(404);
-        res.end();
-      });
-    });
-    server.on('error', reject);
-  });
-}
-
-/**
- * Serialized and run inside the client/test page.
- */
-function wrapMocha() {
-  const log = console.log.bind(console);
-  console.log = (...args) => {
-    if (args.length !== 0) {
-      return log(...args);
-    } else {
-      return log('');  // send blank line if no args
-    }
-  };
-
-  function runnerDone(runner) {
-    // store tests under their categories
-    const tests = {'all': []};
-    ['pass', 'fail', 'pending'].forEach((type) => {
-      const t = [];
-      tests[type] = t;
-      runner.on(type, (test) => {
-        const flat = flatten(test);
-        t.push(flat);
-        tests['all'].push(flat);
-      });
-    });
-
-    /**
-     * Flatten Mocha's `Test` object into plain JSON.
-     */
-    function flatten(test) {
-      return {
-        title: test.title,
-        duration: test.duration,
-        err: test.err ? Object.assign({}, test.err) : null,
-      };
-    }
-
-    return new Promise((resolve) => {
-      runner.on('end', () => resolve(tests));
-    });
-  }
-
-  Object.defineProperty(window, 'mocha', {
-    get() {
-      return undefined;
-    },
-    set(instance) {
-      delete window.mocha;
-      window.mocha = instance;
-
-      // trick Mocha into outputing terminal-like output
-      instance.constructor.reporters.Base.useColors = true;
-      instance.reporter(Mocha.reporters.spec);
-
-      const run = instance.run.bind(instance);
-      instance.run = (...args) => {
-        const runner = run(...args);
-
-        // steal output and log to common global to report completion
-        runnerDone(runner).then((out) => {
-          window.__mochaTest = out;
-        });
-
-        return runner;
-      };
-
-      delete window.mocha;
-      window.mocha = instance;
-    },
-    configurable: true,
-  });
 }
 
 module.exports = function(options) {
@@ -140,6 +39,12 @@ module.exports = function(options) {
   }, options);
 
   const args = options.args.slice();
+  const resources = options.resources.map((r) => {
+    if (!(/^\.{0,2}\//.test(r))) {
+      return `./${r}`;
+    }
+    return r;
+  });
   const cleanup = [];
 
   if (process.env.CI || process.env.TRAVIS) {
@@ -147,7 +52,7 @@ module.exports = function(options) {
   }
 
   const p = (async function runner() {
-    const server = await runServer(() => {
+    const server = await runServer(harnessName, () => {
       return `
 <!DOCTYPE html>
 <html>
@@ -159,76 +64,107 @@ module.exports = function(options) {
 // TODO: assumes TDD
 mocha.setup({ui: 'tdd'});
 window.assert = chai.assert;
-</script>
 
-${
-  options.resources.map((x) => {
-    if (typeof x !== 'string') {
-      throw new Error(`resource must be string: ${x}`);
-    }
-    return `<script src=${JSON.stringify(x)}></script>`
-  })
+function loadResource(r) {
+  if (r.endsWith('.js')) {
+    return import(r);
+  } else if (!r.endsWith('.css')) {
+    throw new TypeError('could not load: ' + r);
+  }
+  return new Promise((resolve, reject) => {
+    const link = document.createElement('link');
+    link.type = 'stylesheet';
+    link.href = r;
+    link.onload = resolve;
+    link.onerror = reject;
+    document.head.append(link);
+  });
 }
 
-<script>
 (function() {
-  var pageError = null;
+  let pageError = null;
+  const resources = ${JSON.stringify(resources)};
 
-  window.addEventListener('error', function(event) {
+  window.addEventListener('error', (event) => {
     pageError = event.filename + ':' + event.lineno + ' ' + event.message;
   });
 
-  window.addEventListener('load', function() {
+  window.addEventListener('load', () => {
+    let p = Promise.resolve();
+
     if (pageError) {
-      suite('page-script-errors', function() {
-        test('no script errors on page', function() {
+      suite('page-script-errors', () => {
+        test('no script errors on page', () => {
           throw pageError;
         });
       });
+    } else {
+      p = p.then(() => Promise.all(resources.map(loadResource)));
     }
-    mocha.run();
+
+    p.then(() => {
+      mocha.run();
+    }).catch((err) => {
+      throw err;
+      console.warn("resource problem", err);
+    });
   });
 })();
+
 </script>
 
 </head>
-<body>
-
-</body>
+<body></body>
 </html>
       `;
     });
     cleanup.push(() => server.close());
 
-    const browser = await puppeteer.launch({headless: options.headless, args});
+    const methodArgs = [];
+    const browser = await puppeteer.launch({headless: options.headless, args: methodArgs});
     cleanup.push(() => browser.close());
 
     const pages = await browser.pages();
     const page = pages[0] || await browser.newPage();
 
+    // TODO(samthor): This rejects on unhandled page errors. We may want to wrap
+    // this in nicer output.
+    const errorPromise = new Promise((_, reject) => {
+      page.on('pageerror', reject);
+    });
+
     if (options.log) {
+      let p = Promise.resolve();
       page.on('console', (msg) => {
-        // arg.jsonValue returns a Promise for some reason
-        const p = msg._args.map((arg) => arg.jsonValue());
-        Promise.all(p).then((args) => {
+        p = p.then(async () => {
+          // arg.jsonValue returns a Promise for some reason
+          const args = await Promise.all(msg._args.map((arg) => arg.jsonValue()));
           const out = util.format(...args);
           process.stdout.write(out + '\n');
         });
       });
-      page.on('pageerror', (err) => console.error(err));
     }
     page.on('dialog', (dialog) => dialog.dismiss());
 
-    await page.evaluateOnNewDocument(wrapMocha);
+    const args = [];
+    await page.evaluateOnNewDocument(require('./lib/preload.js'), args);
     await page.goto(`http://${formatHost(server.address())}/${harnessName}`);
 
     // wait for and return test result global from page
     const timeout = 20 * 1000;
-    await page.waitForFunction(() => window.__mochaTest, {timeout});
-    return await page.evaluate(() => window.__mochaTest);
+    const resultPromise = page.waitForFunction(() => window.__mochaTest, {timeout})
+        .then((handle) => handle.jsonValue());
+    return Promise.race([resultPromise, errorPromise]);
   })();
 
   return p.then(async () => {
+    if (!options.headless) {
+      console.info('Browser open for debug, hit ENTER to continue...');
+      await new Promise((r) => {
+        process.stdin.on('data', r);
+      });
+    }
+
     while (cleanup.length !== 0) {
       await cleanup.pop()();
     }
