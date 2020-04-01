@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
+  "version": "1.0.1",
   "main": "index.js",
   "bin": "run.js",
   "name": "headless-test",
@@ -9,8 +9,8 @@
   "license": "Apache-2.0",
   "private": false,
   "dependencies": {
-    "chalk": "^3.0.0",
     "chai": "^4",
+    "chalk": "^3.0.0",
     "dhost": "^0.1.9",
     "mocha": "^7",
     "mri": "^1",
