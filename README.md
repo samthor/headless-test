@@ -22,10 +22,11 @@ Note that `your-tests.js` should look like a totally normal Mocha test file:
 
 ```js
 // no imports required for Mocha or Chai
-describe('Group', () => {
-  it('does a thing', async () => {
-    assert(true, 'this passes');
+suite('check stuff', () => {
+  test('does a thing', async () => {
     // ...
+    await 'foo';
+    assert(true, 'this passes');
   });
 });
 ```
