@@ -1,5 +1,5 @@
 
-export type ServerOption = http.Server | https.Server | URL | string;
+export type ServerOption = http.Server | https.Server | URL | string | null;
 
 export interface TestOptions {
 
@@ -16,7 +16,7 @@ export interface TestOptions {
   /**
    * Resources to load from the passed server. These are only requested via HTTP.
    */
-  load?: Array<string>;
+  load?: Array<string | {code: string}>;
 
   /**
    * Options to pass to the test driver (currently just Mocha, in `mocha.setup`).
@@ -27,6 +27,12 @@ export interface TestOptions {
    * Optional timeout that tests can run for. If this isn't set, uses the default for the driver.
    */
   timeout?: number;
+
+  /**
+   * Handler to run before Puppeteer closes, regardless of status. Used for debugging.
+   */
+  done?(): Promise<void> | void;
+
 }
 
 /**

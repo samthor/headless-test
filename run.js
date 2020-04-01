@@ -87,7 +87,7 @@ function doneHandler() {
     server = await runServer(handler);
     const ro = {
       load: options._,
-      debug: options.debug,
+      headless: !options.debug,
       driver: options.bdd ? {ui: 'bdd'} : undefined,
       done: options.debug ? doneHandler : null,
     };

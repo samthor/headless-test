@@ -37,7 +37,7 @@ function urlFromInput(raw) {
 module.exports = async function(server, options) {
   options = Object.assign({
     args: [],
-    debug: false,
+    headless: true,
     load: [],
     virtual: [],
     driver: {},
@@ -66,7 +66,7 @@ module.exports = async function(server, options) {
   }
 
   const p = (async function runner() {
-    const browser = await puppeteer.launch({headless: !options.debug, args});
+    const browser = await puppeteer.launch({headless: options.headless, args});
     cleanup.push(async () => {
       await browser.disconnect();
       await browser.close();
