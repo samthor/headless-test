@@ -1,3 +1,6 @@
+[![Tests](https://github.com/samthor/headless-test/workflows/Tests/badge.svg)](https://github.com/samthor/headless-test/actions)
+
+
 Runs tests in a headless browser (Chrome-only via Puppeteer for now).
 Useful to test Web Components, polyfills, or anything else that needs real browser APIs.
 
