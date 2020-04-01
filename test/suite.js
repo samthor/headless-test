@@ -15,10 +15,11 @@
  */
 
 suite('class of thing', () => {
-  test('check thing', () => {
+  test('check thing', async () => {
+    await new Promise((r) => setTimeout(r, 1000));
     assert(true);
   });
-  test('fail thing', () => {
-    assert(false);
+  test('ok thing', () => {
+    assert(true);
   });
 });

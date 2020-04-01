@@ -1,15 +1,11 @@
 {
   "version": "0.1.4",
-  "devDependencies": {
-    "chai": "^4.1.2",
-    "dhost": "0.1.x",
-    "mocha": "5.x",
-    "puppeteer": "2.x"
-  },
-  "peerDependencies": {
-    "dhost": "0.1.x",
-    "mocha": "5.x",
-    "puppeteer": "2.x"
+  "dependencies": {
+    "chai": "^4",
+    "dhost": "^0.1.9",
+    "mocha": "^7",
+    "mri": "^1",
+    "puppeteer": "^2"
   },
   "main": "index.js",
   "bin": "run.js",
@@ -18,8 +14,5 @@
   "repository": "git@github.com:samthor/mocha-headless-server.git",
   "author": "Sam Thorogood <sam.thorogood@gmail.com>",
   "license": "Apache-2.0",
-  "private": false,
-  "dependencies": {
-    "mri": "^1.1.5"
-  }
+  "private": false
 }

@@ -19,152 +19,97 @@
 const puppeteer = require('puppeteer');
 const util = require('util');
 const runServer = require('./lib/server.js');
+const buildHarness = require('./lib/harness.js');
 
-const harnessName = '__harness.html';
-
-function formatHost(addr) {
-  if (addr.family === 'IPv6') {
-    return `[${addr.address}]:${addr.port}`;
+function urlFromInput(raw) {
+  if (raw instanceof URL || typeof raw === 'string') {
+    return new URL(raw);
   }
-  return `${addr.address}:${addr.port}`;
+  const addr = raw.address();
+  const addressPart = addr.family === 'IPv6' ? `[${addr.address}]` : addr.address;
+  return new URL(`http://${addressPart}:${addr.port}`);
 }
 
-module.exports = function(options) {
+/**
+ * @param {!http.Server|!https.Server|!URL|string} server
+ * @param {!Object=} options
+ */
+module.exports = async function(server, options) {
   options = Object.assign({
     args: [],
-    path: '',
     headless: true,
-    log: true,
-    resources: [],
+    load: [],
+    virtual: [],
+    driver: {},
+    // no implicit timeout
   }, options);
 
   const args = options.args.slice();
-  const resources = options.resources.map((r) => {
-    if (!(/^\.{0,2}\//.test(r))) {
-      return `./${r}`;
-    }
-    return r;
-  });
   const cleanup = [];
+
+  // It's valid but weird to pass a null URL. Create a dummy server that doesn't point to anything.
+  if (server == null) {
+    server = await runServer();
+    cleanup.push(() => server.close());
+  }
+
+  // If we're passed a real http[s].Server, get its address. Otherwise, treat it as a URL.
+  const url = urlFromInput(server);
+  const testNonce = `__test=${Math.floor(Math.random() * 0xffffffff).toString(16)}`;
 
   if (process.env.CI || process.env.TRAVIS) {
     args.push('--no-sandbox', '--disable-setuid-sandbox');
   }
 
   const p = (async function runner() {
-    const server = await runServer(harnessName, () => {
-      return `
-<!DOCTYPE html>
-<html>
-<head>
-<link type="stylesheet" href="/node_modules/mocha/mocha.css" />
-<script src="/node_modules/mocha/mocha.js"></script>
-<script src="/node_modules/chai/chai.js"></script>
-<script>
-// TODO: assumes TDD
-mocha.setup({ui: 'tdd'});
-window.assert = chai.assert;
-
-function loadResource(r) {
-  if (r.endsWith('.js')) {
-    return import(r);
-  } else if (!r.endsWith('.css')) {
-    throw new TypeError('could not load: ' + r);
-  }
-  return new Promise((resolve, reject) => {
-    const link = document.createElement('link');
-    link.type = 'stylesheet';
-    link.href = r;
-    link.onload = resolve;
-    link.onerror = reject;
-    document.head.append(link);
-  });
-}
-
-(function() {
-  let pageError = null;
-  const resources = ${JSON.stringify(resources)};
-
-  window.addEventListener('error', (event) => {
-    pageError = event.filename + ':' + event.lineno + ' ' + event.message;
-  });
-
-  window.addEventListener('load', () => {
-    let p = Promise.resolve();
-
-    if (pageError) {
-      suite('page-script-errors', () => {
-        test('no script errors on page', () => {
-          throw pageError;
-        });
-      });
-    } else {
-      p = p.then(() => Promise.all(resources.map(loadResource)));
-    }
-
-    p.then(() => {
-      mocha.run();
-    }).catch((err) => {
-      throw err;
-      console.warn("resource problem", err);
-    });
-  });
-})();
-
-</script>
-
-</head>
-<body></body>
-</html>
-      `;
-    });
-    cleanup.push(() => server.close());
-
-    const methodArgs = [];
-    const browser = await puppeteer.launch({headless: options.headless, args: methodArgs});
+    const browser = await puppeteer.launch({headless: options.headless, args});
     cleanup.push(() => browser.close());
 
     const pages = await browser.pages();
     const page = pages[0] || await browser.newPage();
 
-    // TODO(samthor): This rejects on unhandled page errors. We may want to wrap
-    // this in nicer output.
-    const errorPromise = new Promise((_, reject) => {
+    let resolveCompleted;
+    const completedPromise = new Promise((resolve, reject) => {
+      resolveCompleted = resolve;
       page.on('pageerror', reject);
     });
 
-    if (options.log) {
-      let p = Promise.resolve();
-      page.on('console', (msg) => {
-        p = p.then(async () => {
-          // arg.jsonValue returns a Promise for some reason
-          const args = await Promise.all(msg._args.map((arg) => arg.jsonValue()));
-          const out = util.format(...args);
-          process.stdout.write(out + '\n');
-        });
+    // Log all output but ensure it runs in the right order, as each message technically includes
+    // data we need to await (jsonValue below).
+    let consolePromise = Promise.resolve();
+    page.on('console', (msg) => {
+      consolePromise = consolePromise.then(async () => {
+        const args = await Promise.all(msg._args.map((arg) => arg.jsonValue()));
+        const out = util.format(...args);
+        process.stdout.write(out + '\n');
       });
-    }
+    });
     page.on('dialog', (dialog) => dialog.dismiss());
 
-    const args = [];
-    await page.evaluateOnNewDocument(require('./lib/preload.js'), args);
-    await page.goto(`http://${formatHost(server.address())}/${harnessName}`);
+    // We can't pass a function through to the evaluate function, as it's not Seralizable.
+    await page.exposeFunction('__headlessDone', resolveCompleted);
+    await page.evaluateOnNewDocument(require('./lib/preload.js'), options);
+    await page.setRequestInterception(true);
 
-    // wait for and return test result global from page
-    const timeout = 20 * 1000;
-    const resultPromise = page.waitForFunction(() => window.__mochaTest, {timeout})
-        .then((handle) => handle.jsonValue());
-    return Promise.race([resultPromise, errorPromise]);
+    const handler = await buildHarness(url, testNonce);
+    page.on('request', handler);
+    await page.goto((new URL(`./${testNonce}`, url)).toString());
+
+    return completedPromise;
   })();
 
-  return p.then(async () => {
-    if (!options.headless) {
-      console.info('Browser open for debug, hit ENTER to continue...');
-      await new Promise((r) => {
-        process.stdin.on('data', r);
-      });
-    }
+  const maybeDelay = options.headless ? () => {} : () => {
+    console.info('Browser open for debug, hit ENTER to continue...');
+    return new Promise((r) => {
+      process.stdin.on('data', r);
+    });
+  };
 
+  return p.catch(async (err) => {
+    await maybeDelay()
+    throw err;
+  }).then(async () => {
+    await maybeDelay();
     while (cleanup.length !== 0) {
       await cleanup.pop()();
     }

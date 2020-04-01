@@ -22,24 +22,66 @@ process.on('unhandledRejection', (e) => {
   process.exit(1);
 });
 
+const dhost = require('dhost');
 const run = require('./index.js');
+const runServer = require('./lib/server.js');
 const mri = require('mri');
+const spec = require('./package.json');
 
 const options = mri(process.argv.slice(2), {
-  boolean: ['debug'],
+  default: {
+    debug: false,
+    help: false,
+    tdd: false,
+  },
+  alias: {
+    debug: 'd',
+    help: 'h',
+    tdd: 't',
+  },
+  unknown: (v) => {
+    console.error('error: unknown option `' + v + '`');
+    process.exit(1);
+  },
 });
-if (!options._.length) {
-  console.error('fatal: path must be specified as 2nd arg');
-  process.exit(-2);
+
+const hasAnyCode = options._.some((x) => x.endsWith('.js'));
+if (options.help || !hasAnyCode) {
+  const helpString = `Usage: ${spec['name']} [options] <resources>
+
+Test runner with Puppeteer driven by Mocha. Includes the specified resources as
+either ESM or CSS. See https://github.com/samthor/headless-test for examples.
+
+Starts a static server in the current directory to find resources. Won't start
+unless at least one resource ending with '.js' is specified.
+
+Options:
+  -d, --debug          show test browser and delay completion
+  -t, --tdd            use tdd ui (default is 'bdd') for Mocha
+
+v${spec['version']}`;
+
+  console.info(helpString);
+  process.exit(options.help ? 0 : 1);
 }
 
-void async function() {
-  const out = await run({
-    resources: options._,
-    headless: !options.debug,
+// This generates an ignored Promise. If it rejects, this will be caught in the top-level
+// unhandledRejecection handler.
+(async function() {
+  const handler = dhost({
+    listing: false,
   });
-
-  if (out.fail.length) {
-    process.exit(out.fail.length);
+  let server;
+  try {
+    server = await runServer(handler);
+    const ro = {
+      load: options._,
+      headless: !options.debug,
+      driver: options.tdd ? {ui: 'tdd'} : undefined,
+    };
+    await run(server, ro);
+    process.exit(0);
+  } finally {
+    server && server.close();
   }
-}();
+}());

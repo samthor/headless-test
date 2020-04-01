@@ -1,84 +1,87 @@
-Use to run Mocha tests via headless browsers (currently just Chrome) via a local HTTP server.
+Runs tests in a headless browser (Chrome-only via Puppeteer for now).
+Useful to test Web Components, polyfills, or anything else that needs real browser APIs.
 
-Running a local HTTP server enables resources that require network access (e.g., JS module loading).
-This will serve files in the current working directory.
+Uses [Mocha](https://npmjs.com/package/mocha) and provides the [Chai](https://npmjs.com/package/chai) assertion library.
 
 # Usage
 
-You should have a boilerplate Mocha test file and a suite of tests.
-You'll need [Mocha](http://npmjs.com/package/mocha) and [Chai](http://npmjs.com/package/chai) added to your project.
-For a good example of the boilerplate files, check out `ok-emoji`: [harness (HTML)](https://github.com/samthor/ok-emoji/blob/master/test.html), which includes [tests (JS)](https://github.com/samthor/ok-emoji/blob/master/suite.js)
+Install `headless-test` via your favourite package manager.
 
-## Binary
+## Command-Line or CI
 
-From the command-line:
+Run and pass a number of files (including tests) which will be loaded in-order as ESM:
 
 ```bash
-# either of
-yarn global add mocha-headless-server
-npm install -g mocha-headless-server
-
-# then
-mocha-headless-server path/to/test.html
+headless-test your-code.js your-tests.js
 ```
 
-## Node
+This will exit with non-zero if the Mocha tests fail.
+Easy!
 
-First, add this project as a dev dependency:
-
-```bash
-# either of
-npm install --save-dev mocha-headless-server
-yarn add --dev mocha-headless-server
-```
-
-Then you can `require()` this module and include it in your scripts:
+Note that `your-tests.js` should look like a totally normal Mocha test file:
 
 ```js
-const tester = require('mocha-headless-server');
-
-const options = {
-  path: 'path/to/test.html',  // path, required
-  log: false,                 // whether to log to console
-  headless: true,             // whether to run headless or to show browser
-};
-const p = tester(options);
-p.then((out) => {
-  if (out.fail.length) {
-    // oh no, a test failed
-  }
+// no imports required for Mocha or Chai
+describe('Group', () => {
+  it('does a thing', async () => {
+    assert(true, 'this passes');
+    // ...
+  });
 });
 ```
 
-## Travis-CI
+You can also specifiy `-t` to switch Mocha to TDD mode (the author's preferred mode).
 
-First, add this project as a dev dependency:
+This works by hosting a webserver in the current directory (with [dhost](https://npmjs.com/package/dhost)) so you can load other dependencies.
+
+### Extras
+
+CSS can also be included in the page for tests.
+For example:
 
 ```bash
-# either of
-npm install --save-dev mocha-headless-server
-yarn add --dev mocha-headless-server
+headless-test your-code.js your-css.css your-tests.js
 ```
 
-Then add this script to your `package.json`:
+## API
+
+You can also use `headless-test` programatically.
+The most common use case is to pass a URL (e.g., if you're already running a dev server) and specify `load` to load specific resources as ESM into the test environment.
 
 ```js
-{
-  "scripts": {
-    "test": "mocha-headless-server path/to/test.html"
-  }
-}
+const headlessTest = require('headless-test');
+
+const p = headlessTest('http://localhost:8080', {
+  load: ['your-code.js', 'your-tests.js'],
+  driver: {
+    // options passed to `mocha.setup`
+    ui: 'tdd',
+  },
+});
+
+p.then(() => /* something */);
 ```
 
-Add this `.travis.yml` file to your project:
+Instead of passing a URL, you can also pass a `http.Server` to read its URL (e.g., if you're running a dev server in the same process).
 
-```yaml
-language: node_js
-dist: trusty
-node_js:
-  - "node"
-addons:
-  chrome: stable
+### Virtual Resources
+
+You can also specify _virtual_ script files, if your tests aren't able to be found on your local web server.
+They'll still be run in the same origin, but won't be able to `import` each other.
+For example:
+
+```js
+const p = headlessTest('http://localhost:1234', {
+  load: [
+    {code: 'console.info("hello"); suite("tests", () => { /* stuff */ });'},
+    {code: testCode},
+  ],
+});
 ```
 
-And perform the usual steps to set up [Travis-CI](https://travis-ci.org/) for your project.
+If you're not loading any real script files, it's valid to pass `null` for the URL.
+
+## Notes
+
+Don't use this for integration tests.
+You should be running Mocha locally for that, and having it start Puppeteer to click on things.
