@@ -88,7 +88,8 @@ You should be running Mocha locally for that, and having it start Puppeteer to c
 
 ## Dependencies
 
-This package have a few direct dependencies, although they have a large number of transitive dependencies:
+This package has a few direct dependencies, although _those_ dependencies have a huge number of transitive dependencies.
+Here's the short list:
 
 * `mocha` is the default test driver
 * `chai` provides an assertion library to your tests
