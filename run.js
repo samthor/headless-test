@@ -26,6 +26,7 @@ const dhost = require('dhost');
 const run = require('./index.js');
 const runServer = require('./lib/server.js');
 const mri = require('mri');
+const chalk = require('chalk');
 const spec = require('./package.json');
 
 const options = mri(process.argv.slice(2), {
@@ -37,7 +38,7 @@ const options = mri(process.argv.slice(2), {
   alias: {
     debug: 'd',
     help: 'h',
-    tdd: 't',
+    bdd: 'b',
   },
   unknown: (v) => {
     console.error('error: unknown option `' + v + '`');
@@ -57,12 +58,22 @@ unless at least one resource ending with '.js' is specified.
 
 Options:
   -d, --debug          show test browser and delay completion
-  -t, --tdd            use tdd ui (default is 'bdd') for Mocha
+  -b, --bdd            use 'bdd' ui (default is 'tdd') for Mocha
 
 v${spec['version']}`;
 
   console.info(helpString);
   process.exit(options.help ? 0 : 1);
+}
+
+function doneHandler() {
+  console.info(`Browser open for debug, hit ${chalk.bgGreen('ENTER')} to continue...`);
+  return new Promise((resolve) => {
+    process.stdin.on('data', () => {
+      process.stdin.destroy();
+      resolve();
+    });
+  });
 }
 
 // This generates an ignored Promise. If it rejects, this will be caught in the top-level
@@ -76,11 +87,11 @@ v${spec['version']}`;
     server = await runServer(handler);
     const ro = {
       load: options._,
-      headless: !options.debug,
-      driver: options.tdd ? {ui: 'tdd'} : undefined,
+      debug: options.debug,
+      driver: options.bdd ? {ui: 'bdd'} : undefined,
+      done: options.debug ? doneHandler : null,
     };
     await run(server, ro);
-    process.exit(0);
   } finally {
     server && server.close();
   }

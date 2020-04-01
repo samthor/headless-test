@@ -37,12 +37,16 @@ function urlFromInput(raw) {
 module.exports = async function(server, options) {
   options = Object.assign({
     args: [],
-    headless: true,
+    debug: false,
     load: [],
     virtual: [],
     driver: {},
+    done: null,
     // no implicit timeout
   }, options);
+
+  const doneHandler = options.done;
+  delete options.done;  // not serializable
 
   const args = options.args.slice();
   const cleanup = [];
@@ -62,17 +66,23 @@ module.exports = async function(server, options) {
   }
 
   const p = (async function runner() {
-    const browser = await puppeteer.launch({headless: options.headless, args});
-    cleanup.push(() => browser.close());
+    const browser = await puppeteer.launch({headless: !options.debug, args});
+    cleanup.push(async () => {
+      await browser.disconnect();
+      await browser.close();
+    });
 
     const pages = await browser.pages();
     const page = pages[0] || await browser.newPage();
+    cleanup.push(() => page.close());
 
     let resolveCompleted;
     const completedPromise = new Promise((resolve, reject) => {
       resolveCompleted = resolve;
       page.on('pageerror', reject);
     });
+
+    page.on('error', (err) => console.warn('got page err', err));
 
     // Log all output but ensure it runs in the right order, as each message technically includes
     // data we need to await (jsonValue below).
@@ -98,21 +108,12 @@ module.exports = async function(server, options) {
     return completedPromise;
   })();
 
-  const maybeDelay = options.headless ? () => {} : () => {
-    console.info('Browser open for debug, hit ENTER to continue...');
-    return new Promise((r) => {
-      process.stdin.on('data', r);
-    });
-  };
-
-  return p.catch(async (err) => {
-    await maybeDelay()
-    throw err;
-  }).then(async () => {
-    await maybeDelay();
+  try {
+    return await p;  // we're an async function so this will still be a Promise
+  } finally {
+    doneHandler && await doneHandler();
     while (cleanup.length !== 0) {
       await cleanup.pop()();
     }
-    return p;  // return original Promise if we cleaned up properly
-  });
+  }
 };

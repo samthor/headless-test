@@ -30,7 +30,7 @@ describe('Group', () => {
 });
 ```
 
-You can also specifiy `-t` to switch Mocha to TDD mode (the author's preferred mode).
+You can also specifiy `-b` to switch Mocha to BDD mode, or see `--help` for other options.
 
 This works by hosting a webserver in the current directory (with [dhost](https://npmjs.com/package/dhost)) so you can load other dependencies.
 
@@ -85,3 +85,17 @@ If you're not loading any real script files, it's valid to pass `null` for the U
 
 Don't use this for integration tests.
 You should be running Mocha locally for that, and having it start Puppeteer to click on things.
+
+## Dependencies
+
+This package have a few direct dependencies, although they have a large number of transitive dependencies:
+
+* `mocha` is the default test driver
+* `chai` provides an assertion library to your tests
+* `puppeteer` includes headless Chromium
+
+Included for the CLI only:
+
+* `dhost` provides a never-caching static web server for files
+* `mri` parses command-line arguments
+* `chalk` to make things pretty, because it's included by transitive deps anyway ¯‍\‍_‍(‍ツ‍)‍_‍/‍¯
