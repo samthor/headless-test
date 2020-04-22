@@ -24,7 +24,7 @@ Easy!
 Note that `your-tests.js` should look like a totally normal Mocha test file:
 
 ```js
-// no imports required for Mocha or Chai
+// no imports required for Mocha or Chai, they'll be available globally
 suite('check stuff', () => {
   test('does a thing', async () => {
     // ...
